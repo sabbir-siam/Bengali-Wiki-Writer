@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { 
   Languages, 
   Search, 
@@ -21,27 +21,55 @@ export default function App() {
   const [isFetching, setIsFetching] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [sourceWikitext, setSourceWikitext] = useState("");
-  const [bengaliWikitext, setBengaliWikitext] = useState("");
+  const [chunks, setChunks] = useState<Array<{
+    id: string;
+    source: string;
+    result: string;
+    isTranslating: boolean;
+    error: string | null;
+    stats: any | null;
+    lastLine: string | null;
+  }>>([]);
   const [copied, setCopied] = useState(false);
+  const [copiedChunkId, setCopiedChunkId] = useState<string | null>(null);
   const [copiedSource, setCopiedSource] = useState(false);
-  const [activeTab, setActiveTab] = useState<"source" | "result">("source");
-  const [stats, setStats] = useState<{
-    sourceImages: number;
-    resultImages: number;
-    sourceWords: number;
-    resultWords: number;
-  } | null>(null);
 
-  const textAreaRef = useRef<HTMLTextAreaElement>(null);
+  const editorRefs = useRef<{[key: string]: HTMLDivElement | null}>({});
+
+  const createChunks = (text: string) => {
+    // Target uniform size around 2500 characters
+    const targetSize = 2500;
+    const paragraphs = text.split(/\n\n+/);
+    const finalChunks: string[] = [];
+    let currentChunk = "";
+
+    paragraphs.forEach((p) => {
+      if ((currentChunk.length + p.length) > (targetSize * 1.2) && currentChunk.length > 0) {
+        finalChunks.push(currentChunk);
+        currentChunk = p;
+      } else {
+        currentChunk = currentChunk ? currentChunk + "\n\n" + p : p;
+      }
+    });
+    
+    if (currentChunk) finalChunks.push(currentChunk);
+
+    return finalChunks.map((c, i) => ({
+      id: `chunk-${i}-${Date.now()}`,
+      source: c,
+      result: "",
+      isTranslating: false,
+      error: null,
+      stats: null,
+      lastLine: null
+    }));
+  };
 
   const handleFetch = async () => {
     if (!input.trim()) return;
     setIsFetching(true);
     setError(null);
-    setSourceWikitext("");
-    setBengaliWikitext("");
-    setStats(null);
+    setChunks([]);
 
     try {
       const response = await fetch("/api/fetch-wiki", {
@@ -51,8 +79,9 @@ export default function App() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Failed to fetch");
-      setSourceWikitext(data.wikitext);
-      setActiveTab("source");
+      
+      const newChunks = createChunks(data.wikitext);
+      setChunks(newChunks);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -60,96 +89,105 @@ export default function App() {
     }
   };
 
-  const handleTranslate = async () => {
-    if (!sourceWikitext) return;
-    setIsTranslating(true);
-    setError(null);
+  const translateChunk = async (index: number) => {
+    const chunk = chunks[index];
+    if (!chunk.source.trim()) return;
+
+    setChunks(prev => prev.map((c, i) => i === index ? { ...c, isTranslating: true, error: null } : c));
 
     try {
       const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        throw new Error("GEMINI_API_KEY is not configured.");
-      }
+      if (!apiKey) throw new Error("GEMINI_API_KEY mission");
 
       const ai = new GoogleGenAI({ apiKey });
       
       const countImages = (str: string) => {
-        const matches = str.match(/\[\[(File|Image):/gi);
-        return matches ? matches.length : 0;
+        const matches = str.match(/(?:\[\[(?:File|Image):|\|\s*(?:image|logo|map|skyline|signature|image_name)\s*=)/gi) || [];
+        return matches.length;
       };
+      
+      const imageMatches = chunk.source.match(/(?:\[\[(?:File|Image):|\|\s*(?:image|logo|map|skyline|signature|image_name)\s*=)\s*([^|\]\n}]+)/gi) || [];
+      const imageFiles = imageMatches.map(m => m.replace(/^(?:\[\[(?:File|Image):|\|\s*(?:image|logo|map|skyline|signature|image_name)\s*=)/i, '').trim());
+      const sourceImagesCount = imageFiles.length;
 
-      const sourceImagesCount = countImages(sourceWikitext);
+      const systemInstruction = `You are an elite Bengali Wikipedia editor and historian. 
+TASK: High-fidelity, word-for-word translation of Wikipedia wikitext.
 
-      const systemInstruction = `You are a professional Bengali Wikipedia editor and senior journalist.
-REWRITING TASK:
-- Translate the provided English Wikipedia wikitext into academic Bengali.
-- Output ONLY pure Bengali wikitext. NO preamble. NO commentary. NO markdown fences.
-- ABSOLUTE IMAGE INTEGRITY: You MUST preserve every single [[File:...]] or [[Image:...]] tag. 
-- The source has exactly ${sourceImagesCount} images. Your output MUST have exactly ${sourceImagesCount} images.
-- ABSOLUTE COMPLETENESS: Do NOT summarize. Translate every single sentence.
-- WORD COUNT MULTIPLIER: The Bengali version MUST be ~1.2x longer than English for natural flow.
+STRICT CRITICAL RULES:
+1. MECHANICAL IMAGE PRESERVATION: You MUST copy every [[File:...]] and [[Image:...]] tag and template image parameters (e.g. image=, logo=) exactly as they appear. 
+   - MANDATORY FILES/IMAGES TO INCLUDE: ${imageFiles.join(", ") || "None in this section"}
+   - Total expected images/parameters in this section: ${sourceImagesCount}
+2. NO SUMMARIZATION: Translate every single sentence. If the source has 10 sentences, your output must have 10 (or more) Bengali sentences.
+3. TAG INTEGRITY: Do not modify <ref> tags, {{templates}}, or categories.
+4. TONE: Senior journalistic Bengali.
 
-CONSTITUTIONAL RULES:
 ${INSTRUCTIONS}`;
 
-      // Use gemini-3-flash-preview for high performance and reliable text processing
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
-        contents: [
-          { role: "user", parts: [{ text: `TASK: COMPLETE REWRITE
-1. TRANSLATE EVERY SENTENCE.
-2. INCLUDE ALL ${sourceImagesCount} IMAGES.
-3. NO SUMMARIZATION.
-4. EXPAND BENGALI NATURALLY.
+        contents: [{ role: "user", parts: [{ text: `TRANSLATE THIS WIKITEXT SECTION. 
+- PRESERVE ALL ${sourceImagesCount} IMAGES.
+- DO NOT SKIP ANY CONTENT.
+- EXPAND NATURALLY IN BENGALI.
 
-ENGLISH SOURCE:
-${sourceWikitext}` }] }
-        ],
+SOURCE:
+${chunk.source}` }] }],
         config: {
-          systemInstruction: systemInstruction,
-          temperature: 0.1,
+          systemInstruction,
+          temperature: 0,
           maxOutputTokens: 16384,
         }
       });
 
       let text = response.text || "";
-
-      // Clean up if the model accidentally included markdown fences
       text = text.replace(/^```wikitext\n/, "").replace(/^```\n?/, "").replace(/\n?```$/, "");
 
-      const countWords = (str: string) => {
-        return str.trim().split(/\s+/).length;
-      };
+      const countWords = (str: string) => str.trim().split(/\s+/).length;
+      
+      // Highlight heuristic
+      const sourceLines = chunk.source.split('\n');
+      const refs = chunk.source.match(/<ref[^>]*>.*?<\/ref>|{{[^}]+}}/g) || [];
+      let lastMatch = null;
+      for (let i = refs.length - 1; i >= 0; i--) {
+        if (text.includes(refs[i])) {
+          const lIdx = sourceLines.findIndex(l => l.includes(refs[i]));
+          if (lIdx !== -1) { lastMatch = sourceLines[lIdx].trim(); break; }
+        }
+      }
 
-      setStats({
+      const chunkStats = {
         sourceImages: sourceImagesCount,
         resultImages: countImages(text),
-        sourceWords: countWords(sourceWikitext),
+        sourceWords: countWords(chunk.source),
         resultWords: countWords(text),
-      });
+      };
 
-      setBengaliWikitext(text);
-      setActiveTab("result");
+      setChunks(prev => prev.map((c, i) => i === index ? { 
+        ...c, 
+        result: text, 
+        isTranslating: false, 
+        stats: chunkStats,
+        lastLine: lastMatch 
+      } : c));
+
     } catch (err: any) {
-      console.error("Gemini Error:", err);
-      setError(err.message || "Failed to translate with AI.");
-    } finally {
-      setIsTranslating(false);
+      setChunks(prev => prev.map((c, i) => i === index ? { ...c, isTranslating: false, error: err.message } : c));
     }
   };
 
-  const copyToClipboard = () => {
-    if (!bengaliWikitext) return;
-    navigator.clipboard.writeText(bengaliWikitext);
+  const copyFullResult = () => {
+    const fullText = chunks.map(c => c.result || "").join("\n\n");
+    if (!fullText.trim()) return;
+    navigator.clipboard.writeText(fullText);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const copySourceToClipboard = () => {
-    if (!sourceWikitext) return;
-    navigator.clipboard.writeText(sourceWikitext);
-    setCopiedSource(true);
-    setTimeout(() => setCopiedSource(false), 2000);
+  const copyChunkResult = (id: string, text: string) => {
+    if (!text.trim()) return;
+    navigator.clipboard.writeText(text);
+    setCopiedChunkId(id);
+    setTimeout(() => setCopiedChunkId(null), 2000);
   };
 
   return (
@@ -260,183 +298,215 @@ ${sourceWikitext}` }] }
               </div>
             </div>
 
-            {stats && (
+            {chunks.some(c => c.result) && (
               <motion.div 
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 className="bg-white rounded-2xl border border-neutral-200 p-6 space-y-4"
               >
-                <h3 className="font-bold text-neutral-800 flex items-center gap-2 border-b border-neutral-100 pb-2">
+                <h3 className="font-bold text-neutral-800 flex items-center gap-2 border-b border-neutral-100 pb-2 text-sm">
                   <Check size={18} className="text-emerald-600" />
-                  Quality Audit
+                  Translation Progress
                 </h3>
                 
                 <div className="space-y-3">
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="text-neutral-500">Images Saved:</span>
-                    <span className={`font-bold ${stats.resultImages === stats.sourceImages ? 'text-emerald-600' : 'text-red-600'}`}>
-                      {stats.resultImages} / {stats.sourceImages}
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-neutral-500 font-medium">Sections Done:</span>
+                    <span className="font-bold text-emerald-600">
+                      {chunks.filter(c => c.result).length} / {chunks.length}
                     </span>
                   </div>
                   
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="text-neutral-500">Length Multiplier:</span>
-                    <span className={`font-bold ${(stats.resultWords / stats.sourceWords) >= 1.2 ? 'text-emerald-600' : 'text-amber-600'}`}>
-                      {(stats.resultWords / stats.sourceWords).toFixed(2)}x
-                    </span>
+                  <div className="w-full bg-neutral-100 h-1.5 rounded-full overflow-hidden">
+                    <motion.div 
+                      className="bg-emerald-500 h-full"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${(chunks.filter(c => c.result).length / chunks.length) * 100}%` }}
+                    />
                   </div>
 
-                  {stats.resultImages < stats.sourceImages && (
-                    <div className="p-2 bg-red-50 text-red-700 text-[10px] rounded-lg border border-red-100 flex items-start gap-1">
-                      <AlertCircle size={10} className="mt-0.5 flex-shrink-0" />
-                      Warning: Some images from the original article are missing.
-                    </div>
-                  )}
-
-                  {(stats.resultWords / stats.sourceWords) < 1.2 && (
-                    <div className="p-2 bg-amber-50 text-amber-700 text-[10px] rounded-lg border border-amber-100 flex items-start gap-1">
-                      <AlertCircle size={10} className="mt-0.5 flex-shrink-0" />
-                      Note: Article length is below target. Content may be condensed.
-                    </div>
-                  )}
+                  <p className="text-[10px] text-neutral-400 font-medium leading-relaxed">
+                    Translate all sections to complete the article. You can copy the full result at the top of the editor.
+                  </p>
                 </div>
               </motion.div>
             )}
           </div>
 
-          {/* Right Column: Editor / Result View */}
-          <div className="lg:col-span-9 space-y-4">
-            <div className="bg-white rounded-2xl border border-neutral-200 shadow-sm overflow-hidden min-h-[600px] flex flex-col">
-              {/* Tabs */}
-              <div className="flex items-center justify-between border-b border-neutral-200 px-4">
-                <div className="flex">
+          {/* Right Column: Chunked Editor View */}
+          <div className="lg:col-span-9 space-y-6">
+            {chunks.length > 0 && (
+              <div className="sticky top-[72px] z-40 bg-white p-4 rounded-xl border border-emerald-100 shadow-sm flex items-center justify-between">
+                <div>
+                  <h2 className="text-sm font-bold text-emerald-800 uppercase tracking-widest">Article Sections ({chunks.length})</h2>
+                  <p className="text-[10px] text-neutral-500 font-bold">Translate parts individually for total accuracy</p>
+                </div>
+                <div className="flex gap-2">
                   <button 
-                    onClick={() => setActiveTab("source")}
-                    className={`px-6 py-4 text-sm font-semibold border-b-2 transition-colors flex items-center gap-2 ${
-                      activeTab === "source" 
-                        ? "border-emerald-600 text-emerald-600" 
-                        : "border-transparent text-neutral-500 hover:text-neutral-700 hover:border-neutral-200"
-                    }`}
+                    onClick={copyFullResult}
+                    disabled={!chunks.some(c => c.result)}
+                    className="bg-neutral-900 hover:bg-neutral-800 disabled:opacity-20 text-white px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 active:scale-95"
                   >
-                    <PenTool size={16} />
-                    English Source
-                  </button>
-                  <button 
-                    onClick={() => setActiveTab("result")}
-                    disabled={!bengaliWikitext && !isTranslating}
-                    className={`px-6 py-4 text-sm font-semibold border-b-2 transition-colors flex items-center gap-2 disabled:opacity-20 ${
-                      activeTab === "result" 
-                        ? "border-emerald-600 text-emerald-600" 
-                        : "border-transparent text-neutral-500 hover:text-neutral-700 hover:border-neutral-200"
-                    }`}
-                  >
-                    <FileText size={16} />
-                    Bengali Wikitext
+                    {copied ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+                    {copied ? "Copied!" : "Copy Full Article"}
                   </button>
                 </div>
+              </div>
+            )}
 
-                <div className="flex items-center gap-2 py-2">
-                  {activeTab === "source" && sourceWikitext && (
-                    <div className="flex items-center gap-2">
-                       <button 
-                        onClick={copySourceToClipboard}
-                        className="text-neutral-500 hover:text-neutral-700 p-2 rounded-lg transition-colors flex items-center gap-1.5"
-                        title="Copy Source"
-                      >
-                        {copiedSource ? <Check size={16} className="text-emerald-500" /> : <Copy size={16} />}
-                        <span className="text-[10px] font-bold uppercase">{copiedSource ? "Copied!" : "Copy Source"}</span>
-                      </button>
-                      <button 
-                        onClick={handleTranslate}
-                        disabled={isTranslating}
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all flex items-center gap-2 active:scale-95"
-                      >
-                        {isTranslating ? <Loader2 size={16} className="animate-spin" /> : "Rewrite in Bengali"}
-                      </button>
+            <div className="space-y-8">
+              {chunks.length === 0 ? (
+                <div className="bg-white rounded-2xl border border-neutral-200 shadow-sm min-h-[600px] flex flex-col items-center justify-center p-12 text-center">
+                  <div className="w-20 h-20 bg-neutral-50 rounded-3xl flex items-center justify-center text-neutral-300 mb-6">
+                    <BookOpen size={40} />
+                  </div>
+                  <h2 className="text-xl font-bold text-neutral-800 mb-2">Ready to start?</h2>
+                  <p className="text-neutral-500 max-w-sm mb-8">
+                    Enter an English Wikipedia title or URL above. We will split the article into sections for easier translation.
+                  </p>
+                  <div className="grid grid-cols-2 gap-4 w-full max-w-lg">
+                     <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-100 text-left">
+                        <PenTool size={16} className="text-emerald-600 mb-2" />
+                        <h4 className="text-xs font-bold text-emerald-900 uppercase mb-1">Edit First</h4>
+                        <p className="text-[10px] text-emerald-700 leading-relaxed">Refine or delete parts of the English source if needed.</p>
+                     </div>
+                     <div className="p-4 bg-amber-50 rounded-xl border border-amber-100 text-left">
+                        <Languages size={16} className="text-amber-600 mb-2" />
+                        <h4 className="text-xs font-bold text-amber-900 uppercase mb-1">Rewrite</h4>
+                        <p className="text-[10px] text-amber-700 leading-relaxed">Each section gets a dedicated AI rewrite pass.</p>
+                     </div>
+                  </div>
+                </div>
+              ) : (
+                chunks.map((chunk, idx) => (
+                  <motion.div 
+                    key={chunk.id}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="bg-white rounded-2xl border border-neutral-200 shadow-sm overflow-hidden flex flex-col"
+                  >
+                    {/* Chunk Header */}
+                    <div className="bg-neutral-50 border-b border-neutral-200 px-6 py-4 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                         <span className="bg-neutral-900 text-white w-6 h-6 rounded-md flex items-center justify-center text-[10px] font-bold">
+                           {idx + 1}
+                         </span>
+                         <div>
+                            <h4 className="text-xs font-bold text-neutral-800 uppercase tracking-widest">Section {idx + 1}</h4>
+                            <p className="text-[10px] text-neutral-500 font-bold uppercase">{chunk.source.length} characters</p>
+                         </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {chunk.error && (
+                          <div className="flex items-center gap-1 text-red-600 text-[10px] font-bold mr-2">
+                            <AlertCircle size={12} />
+                            Retry Required
+                          </div>
+                        )}
+                        <button 
+                          onClick={() => translateChunk(idx)}
+                          disabled={chunk.isTranslating}
+                          className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 active:scale-95 shadow-lg shadow-emerald-200/50"
+                        >
+                          {chunk.isTranslating ? (
+                            <Loader2 size={14} className="animate-spin" />
+                          ) : (
+                            <><Languages size={14} /> Rewrite Section</>
+                          )}
+                        </button>
+                      </div>
                     </div>
-                  )}
-                  {activeTab === "result" && bengaliWikitext && (
-                    <button 
-                      onClick={copyToClipboard}
-                      className="bg-neutral-900 hover:bg-neutral-800 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all flex items-center gap-2"
-                    >
-                      {copied ? <Check size={16} className="text-emerald-400" /> : <Copy size={16} />}
-                      {copied ? "Copied!" : "Copy Wikitext"}
-                    </button>
-                  )}
-                </div>
-              </div>
 
-              {/* Editor Pane */}
-              <div className="flex-1 relative">
-                <AnimatePresence mode="wait">
-                  {activeTab === "source" ? (
-                    <motion.div 
-                      key="source"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      className="h-full flex flex-col"
-                    >
-                      {sourceWikitext ? (
-                        <div className="flex flex-col flex-1">
-                          <div className="bg-neutral-800 text-[10px] text-neutral-400 px-4 py-1 flex items-center gap-2 uppercase tracking-widest font-bold">
-                            <PenTool size={10} />
-                            Editorial Zone: You can edit or delete text before rewriting
-                          </div>
-                          <textarea 
-                            className="w-full flex-1 p-6 font-mono text-sm leading-relaxed bg-neutral-900 text-neutral-200 focus:outline-none resize-none min-h-[600px]"
-                            value={sourceWikitext}
-                            onChange={(e) => setSourceWikitext(e.target.value)}
-                            spellCheck={false}
-                          />
+                    <div className="grid grid-cols-1 md:grid-cols-2 h-full min-h-[400px]">
+                      {/* English Source Area */}
+                      <div className="flex flex-col border-r border-neutral-100 bg-neutral-900 overflow-hidden">
+                        <div className="bg-neutral-800 text-[9px] text-neutral-400 px-4 py-1.5 flex items-center gap-2 uppercase tracking-[0.2em] font-bold">
+                          <PenTool size={10} />
+                          Editorial Zone (English)
                         </div>
-                      ) : (
-                        <div className="flex flex-col items-center justify-center h-[600px] text-neutral-400 gap-4 bg-neutral-50">
-                          <div className="w-16 h-16 rounded-2xl bg-neutral-200 flex items-center justify-center">
-                            <BookOpen size={32} />
-                          </div>
-                          <div className="text-center">
-                            <p className="font-semibold">No article loaded</p>
-                            <p className="text-sm">Search for an English Wikipedia article above to begin.</p>
-                          </div>
-                        </div>
-                      )}
-                    </motion.div>
-                  ) : (
-                    <motion.div 
-                      key="result"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      className="h-full"
-                    >
-                      {isTranslating ? (
-                        <div className="flex flex-col items-center justify-center h-[600px] text-neutral-400 gap-6 bg-neutral-50">
-                          <div className="relative">
-                            <div className="w-16 h-16 border-4 border-emerald-100 rounded-full"></div>
-                            <div className="w-16 h-16 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin absolute top-0"></div>
-                          </div>
-                          <div className="text-center max-w-sm px-4">
-                            <p className="font-semibold text-neutral-800">Processing Knowledge...</p>
-                            <p className="text-sm">The AI is rewriting the article using senior journalistic standards and Bengali linguistic nuances. This may take a minute.</p>
-                          </div>
-                        </div>
-                      ) : bengaliWikitext ? (
-                        <textarea 
-                          readOnly
-                          className="w-full h-[600px] p-6 font-mono text-sm leading-relaxed bg-emerald-950 text-emerald-50 focus:outline-none resize-none"
-                          value={bengaliWikitext}
+                        <div 
+                          ref={el => {
+                            editorRefs.current[chunk.id] = el;
+                            if (el && !el.innerText && chunk.source) {
+                               el.innerText = chunk.source;
+                               // Red highlighting logic for the last line
+                               if (chunk.lastLine && chunk.source.includes(chunk.lastLine)) {
+                                  const lastIndex = chunk.source.lastIndexOf(chunk.lastLine);
+                                  const firstPart = chunk.source.substring(0, lastIndex);
+                                  const remainingPart = chunk.source.substring(lastIndex + chunk.lastLine.length);
+                                  el.innerHTML = `${firstPart.replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m] || m))}<span style="color: #ef4444; font-weight: bold; border-bottom: 2px solid #ef4444;">${chunk.lastLine.replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m] || m))}</span>${remainingPart.replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m] || m))}`;
+                               }
+                            }
+                          }}
+                          contentEditable
+                          onInput={(e) => {
+                             const newSource = e.currentTarget.innerText;
+                             setChunks(prev => prev.map((c, i) => i === idx ? { ...c, source: newSource } : c));
+                          }}
+                          spellCheck={false}
+                          className="flex-1 p-6 font-mono text-[13px] leading-relaxed text-neutral-300 focus:outline-none overflow-y-auto whitespace-pre-wrap outline-none selection:bg-emerald-500/20"
                         />
-                      ) : (
-                        <div className="flex flex-col items-center justify-center h-[600px] text-neutral-400 gap-4 bg-neutral-50">
-                          <p>Click "Rewrite in Bengali" to generate content.</p>
+                      </div>
+
+                      {/* Bengali Result Area */}
+                      <div className="flex flex-col bg-emerald-950/30">
+                        <div className="bg-emerald-900/40 text-[9px] text-emerald-100/60 px-4 py-1.5 flex items-center justify-between uppercase tracking-[0.2em] font-bold">
+                          <div className="flex items-center gap-2">
+                            <FileText size={10} />
+                            Bengali Result
+                          </div>
+                          {chunk.result && (
+                            <button 
+                              onClick={() => copyChunkResult(chunk.id, chunk.result)}
+                              className="text-emerald-300 hover:text-white flex items-center gap-1 transition-colors group/copy"
+                            >
+                              {copiedChunkId === chunk.id ? <Check size={10} /> : <Copy size={10} />}
+                              <span>{copiedChunkId === chunk.id ? "Copied" : "Copy Section"}</span>
+                            </button>
+                          )}
                         </div>
-                      )}
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
+                        <div className="flex-1 relative">
+                          {chunk.isTranslating ? (
+                            <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center gap-4">
+                               <div className="w-10 h-10 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin"></div>
+                               <p className="text-[10px] font-bold uppercase text-emerald-600 tracking-widest animate-pulse">Rewriting Knowledge...</p>
+                            </div>
+                          ) : chunk.result ? (
+                            <textarea 
+                              readOnly
+                              className="w-full h-full p-6 font-mono text-[13px] leading-relaxed bg-transparent text-emerald-50 focus:outline-none resize-none"
+                              value={chunk.result}
+                            />
+                          ) : (
+                            <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center text-neutral-400/40 opacity-50 grayscale transition-all group-hover:grayscale-0">
+                               <Languages size={40} className="mb-4" />
+                               <p className="text-[10px] font-bold uppercase tracking-widest">Click Rewrite</p>
+                            </div>
+                          )}
+                        </div>
+                        
+                        {chunk.stats && (
+                          <div className="bg-emerald-900/10 p-4 border-t border-emerald-100/10 grid grid-cols-2 gap-4">
+                            <div className="flex justify-between items-center text-[9px] font-bold uppercase tracking-tighter">
+                               <span className="text-emerald-700/60">Images:</span>
+                               <span className={chunk.stats.resultImages === chunk.stats.sourceImages ? "text-emerald-600" : "text-red-500"}>
+                                 {chunk.stats.resultImages}/{chunk.stats.sourceImages}
+                               </span>
+                            </div>
+                            <div className="flex justify-between items-center text-[9px] font-bold uppercase tracking-tighter">
+                               <span className="text-emerald-700/60">Expansion:</span>
+                               <span className={(chunk.stats.resultWords / chunk.stats.sourceWords) >= 1.2 ? "text-emerald-600" : "text-amber-500"}>
+                                 {(chunk.stats.resultWords / chunk.stats.sourceWords).toFixed(1)}x
+                               </span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </motion.div>
+                ))
+              )}
             </div>
           </div>
         </div>
@@ -450,7 +520,7 @@ ${sourceWikitext}` }] }
              <span className="font-bold text-sm">Bengali Wiki Writer</span>
           </div>
           <p className="text-xs text-neutral-400 max-w-md text-center md:text-right">
-            By using this tool, you agree to attribute the source English Wikipedia article when publishing. This tool is designed to assist professional Bengali editors.
+            Developer info- Sabbir Ahamed Siam || CE,CUET
           </p>
         </div>
       </footer>
