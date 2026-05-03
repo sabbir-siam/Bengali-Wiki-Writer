@@ -10,7 +10,6 @@ import {
   AlertCircle,
   BookOpen,
   FileText,
-  History,
   PenTool
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
@@ -25,7 +24,14 @@ export default function App() {
   const [sourceWikitext, setSourceWikitext] = useState("");
   const [bengaliWikitext, setBengaliWikitext] = useState("");
   const [copied, setCopied] = useState(false);
+  const [copiedSource, setCopiedSource] = useState(false);
   const [activeTab, setActiveTab] = useState<"source" | "result">("source");
+  const [stats, setStats] = useState<{
+    sourceImages: number;
+    resultImages: number;
+    sourceWords: number;
+    resultWords: number;
+  } | null>(null);
 
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -35,6 +41,7 @@ export default function App() {
     setError(null);
     setSourceWikitext("");
     setBengaliWikitext("");
+    setStats(null);
 
     try {
       const response = await fetch("/api/fetch-wiki", {
@@ -66,20 +73,42 @@ export default function App() {
 
       const ai = new GoogleGenAI({ apiKey });
       
-      const systemPrompt = `You are a master Bengali Wikipedia editor, an expert translator, and a seasoned Bengali journalist with 20+ years of experience. Your goal is to rewrite the provided English Wikipedia wikitext into a complete, publication-ready Bengali Wikipedia article.
+      const countImages = (str: string) => {
+        const matches = str.match(/\[\[(File|Image):/gi);
+        return matches ? matches.length : 0;
+      };
 
-FOLLOW THESE STRICT RULES:
-${INSTRUCTIONS}
+      const sourceImagesCount = countImages(sourceWikitext);
 
-The output must be ONLY the raw Bengali wikitext. No preamble, no commentary, no markdown code fences.`;
+      const systemInstruction = `You are a professional Bengali Wikipedia editor and senior journalist.
+REWRITING TASK:
+- Translate the provided English Wikipedia wikitext into academic Bengali.
+- Output ONLY pure Bengali wikitext. NO preamble. NO commentary. NO markdown fences.
+- ABSOLUTE IMAGE INTEGRITY: You MUST preserve every single [[File:...]] or [[Image:...]] tag. 
+- The source has exactly ${sourceImagesCount} images. Your output MUST have exactly ${sourceImagesCount} images.
+- ABSOLUTE COMPLETENESS: Do NOT summarize. Translate every single sentence.
+- WORD COUNT MULTIPLIER: The Bengali version MUST be ~1.2x longer than English for natural flow.
 
+CONSTITUTIONAL RULES:
+${INSTRUCTIONS}`;
+
+      // Use gemini-3-flash-preview for high performance and reliable text processing
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: [
-          { role: "user", parts: [{ text: systemPrompt }, { text: `ENGLISH WIKITEXT SOURCE:\n\n${sourceWikitext}` }] }
+          { role: "user", parts: [{ text: `TASK: COMPLETE REWRITE
+1. TRANSLATE EVERY SENTENCE.
+2. INCLUDE ALL ${sourceImagesCount} IMAGES.
+3. NO SUMMARIZATION.
+4. EXPAND BENGALI NATURALLY.
+
+ENGLISH SOURCE:
+${sourceWikitext}` }] }
         ],
         config: {
+          systemInstruction: systemInstruction,
           temperature: 0.1,
+          maxOutputTokens: 16384,
         }
       });
 
@@ -87,6 +116,17 @@ The output must be ONLY the raw Bengali wikitext. No preamble, no commentary, no
 
       // Clean up if the model accidentally included markdown fences
       text = text.replace(/^```wikitext\n/, "").replace(/^```\n?/, "").replace(/\n?```$/, "");
+
+      const countWords = (str: string) => {
+        return str.trim().split(/\s+/).length;
+      };
+
+      setStats({
+        sourceImages: sourceImagesCount,
+        resultImages: countImages(text),
+        sourceWords: countWords(sourceWikitext),
+        resultWords: countWords(text),
+      });
 
       setBengaliWikitext(text);
       setActiveTab("result");
@@ -105,8 +145,15 @@ The output must be ONLY the raw Bengali wikitext. No preamble, no commentary, no
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const copySourceToClipboard = () => {
+    if (!sourceWikitext) return;
+    navigator.clipboard.writeText(sourceWikitext);
+    setCopiedSource(true);
+    setTimeout(() => setCopiedSource(false), 2000);
+  };
+
   return (
-    <div className="min-h-screen bg-neutral-50 text-neutral-900 font-sans">
+    <div className="min-h-screen bg-neutral-50 text-neutral-900 font-sans selection:bg-emerald-100">
       {/* Header */}
       <header className="bg-white border-b border-neutral-200 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
@@ -115,8 +162,8 @@ The output must be ONLY the raw Bengali wikitext. No preamble, no commentary, no
               <Languages size={24} />
             </div>
             <div>
-              <h1 className="text-xl font-bold tracking-tight text-neutral-800">Bengali Wiki Writer</h1>
-              <p className="text-xs text-neutral-500 font-medium uppercase tracking-widest">Wikipedia Editor Pro</p>
+              <h1 className="text-xl font-bold tracking-tight text-neutral-800 font-display">Bengali Wiki Writer</h1>
+              <p className="text-[10px] text-neutral-500 font-bold uppercase tracking-[0.2em]">Wikipedia Editor Pro</p>
             </div>
           </div>
           
@@ -212,6 +259,49 @@ The output must be ONLY the raw Bengali wikitext. No preamble, no commentary, no
                 <BookOpen size={100} />
               </div>
             </div>
+
+            {stats && (
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="bg-white rounded-2xl border border-neutral-200 p-6 space-y-4"
+              >
+                <h3 className="font-bold text-neutral-800 flex items-center gap-2 border-b border-neutral-100 pb-2">
+                  <Check size={18} className="text-emerald-600" />
+                  Quality Audit
+                </h3>
+                
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-neutral-500">Images Saved:</span>
+                    <span className={`font-bold ${stats.resultImages === stats.sourceImages ? 'text-emerald-600' : 'text-red-600'}`}>
+                      {stats.resultImages} / {stats.sourceImages}
+                    </span>
+                  </div>
+                  
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-neutral-500">Length Multiplier:</span>
+                    <span className={`font-bold ${(stats.resultWords / stats.sourceWords) >= 1.2 ? 'text-emerald-600' : 'text-amber-600'}`}>
+                      {(stats.resultWords / stats.sourceWords).toFixed(2)}x
+                    </span>
+                  </div>
+
+                  {stats.resultImages < stats.sourceImages && (
+                    <div className="p-2 bg-red-50 text-red-700 text-[10px] rounded-lg border border-red-100 flex items-start gap-1">
+                      <AlertCircle size={10} className="mt-0.5 flex-shrink-0" />
+                      Warning: Some images from the original article are missing.
+                    </div>
+                  )}
+
+                  {(stats.resultWords / stats.sourceWords) < 1.2 && (
+                    <div className="p-2 bg-amber-50 text-amber-700 text-[10px] rounded-lg border border-amber-100 flex items-start gap-1">
+                      <AlertCircle size={10} className="mt-0.5 flex-shrink-0" />
+                      Note: Article length is below target. Content may be condensed.
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            )}
           </div>
 
           {/* Right Column: Editor / Result View */}
@@ -228,7 +318,7 @@ The output must be ONLY the raw Bengali wikitext. No preamble, no commentary, no
                         : "border-transparent text-neutral-500 hover:text-neutral-700 hover:border-neutral-200"
                     }`}
                   >
-                    <History size={16} />
+                    <PenTool size={16} />
                     English Source
                   </button>
                   <button 
@@ -247,13 +337,23 @@ The output must be ONLY the raw Bengali wikitext. No preamble, no commentary, no
 
                 <div className="flex items-center gap-2 py-2">
                   {activeTab === "source" && sourceWikitext && (
-                    <button 
-                      onClick={handleTranslate}
-                      disabled={isTranslating}
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all flex items-center gap-2"
-                    >
-                      {isTranslating ? <Loader2 size={16} className="animate-spin" /> : "Rewrite in Bengali"}
-                    </button>
+                    <div className="flex items-center gap-2">
+                       <button 
+                        onClick={copySourceToClipboard}
+                        className="text-neutral-500 hover:text-neutral-700 p-2 rounded-lg transition-colors flex items-center gap-1.5"
+                        title="Copy Source"
+                      >
+                        {copiedSource ? <Check size={16} className="text-emerald-500" /> : <Copy size={16} />}
+                        <span className="text-[10px] font-bold uppercase">{copiedSource ? "Copied!" : "Copy Source"}</span>
+                      </button>
+                      <button 
+                        onClick={handleTranslate}
+                        disabled={isTranslating}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all flex items-center gap-2 active:scale-95"
+                      >
+                        {isTranslating ? <Loader2 size={16} className="animate-spin" /> : "Rewrite in Bengali"}
+                      </button>
+                    </div>
                   )}
                   {activeTab === "result" && bengaliWikitext && (
                     <button 
@@ -276,14 +376,21 @@ The output must be ONLY the raw Bengali wikitext. No preamble, no commentary, no
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
-                      className="h-full"
+                      className="h-full flex flex-col"
                     >
                       {sourceWikitext ? (
-                        <textarea 
-                          readOnly
-                          className="w-full h-[600px] p-6 font-mono text-sm leading-relaxed bg-neutral-900 text-neutral-200 focus:outline-none resize-none"
-                          value={sourceWikitext}
-                        />
+                        <div className="flex flex-col flex-1">
+                          <div className="bg-neutral-800 text-[10px] text-neutral-400 px-4 py-1 flex items-center gap-2 uppercase tracking-widest font-bold">
+                            <PenTool size={10} />
+                            Editorial Zone: You can edit or delete text before rewriting
+                          </div>
+                          <textarea 
+                            className="w-full flex-1 p-6 font-mono text-sm leading-relaxed bg-neutral-900 text-neutral-200 focus:outline-none resize-none min-h-[600px]"
+                            value={sourceWikitext}
+                            onChange={(e) => setSourceWikitext(e.target.value)}
+                            spellCheck={false}
+                          />
+                        </div>
                       ) : (
                         <div className="flex flex-col items-center justify-center h-[600px] text-neutral-400 gap-4 bg-neutral-50">
                           <div className="w-16 h-16 rounded-2xl bg-neutral-200 flex items-center justify-center">
@@ -317,7 +424,6 @@ The output must be ONLY the raw Bengali wikitext. No preamble, no commentary, no
                         </div>
                       ) : bengaliWikitext ? (
                         <textarea 
-                          ref={textAreaRef}
                           readOnly
                           className="w-full h-[600px] p-6 font-mono text-sm leading-relaxed bg-emerald-950 text-emerald-50 focus:outline-none resize-none"
                           value={bengaliWikitext}
