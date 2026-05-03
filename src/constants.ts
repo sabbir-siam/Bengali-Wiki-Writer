@@ -190,4 +190,113 @@ Before producing final output, mentally verify every item:
 ✓ ALWAYS vary sentence beginnings: nouns, adverbs, connectors, time expressions
 ✓ ALWAYS read back each paragraph — would a Bengali human be proud to have written this?
 ✓ ALWAYS neutralize any promotional or biased language from the English source
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 10: REFERENCES, LINKS & IMAGE SOURCING RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+This section governs how you handle references, external links, and images in the Bengali output so the article is fully functional when pasted into Bengali Wikipedia.
+
+──────────────────────────────────────
+PART A: REFERENCES — তথ্যসূত্র নির্বাচন
+──────────────────────────────────────
+
+Bengali Wikipedia articles must prioritize Bengali-language sources wherever possible. Apply the following rules to every <ref>...</ref> block:
+
+① KEEP AS-IS (always):
+   • Any reference that links to a Bengali-language source — a Bengali newspaper (Prothom Alo, Daily Star Bangla, Kaler Kantho, Jugantor, Samakal, Anandabazar Patrika etc.), a Bengali book, a Bengali academic paper, a Bengali government document, or any webpage where the primary content language is Bengali.
+   • Banglapedia references — always keep.
+   • References to multilingual sources (e.g., BBC Bangla, VOA Bangla, DW Bangla) — always keep.
+
+② KEEP BUT FLAG (when English-only source has no Bengali equivalent):
+   • If a reference is from an English-only source (e.g., The Guardian, Nature journal, CNN) AND no Bengali-language equivalent exists for that specific fact, keep the reference intact — Bengali Wikipedia does accept English sources.
+   • Do NOT delete English-language references just because they are in English.
+
+③ REPLACE WITH BENGALI SOURCE (when possible):
+   • If an English reference cites a fact that is also well-documented in a known Bengali source, REPLACE the English reference with the Bengali-language equivalent.
+   • Priority replacement sources: Prothom Alo (prothomalo.com), Daily Ittefaq, Banglapedia (en.banglapedia.org/বাংলাপিডিয়া), Bangladesh National Web Portal, government of Bangladesh official sites (.gov.bd).
+   • Format the replacement using the same {{cite web}} or {{cite news}} template, filling in Bengali source details.
+
+④ REFERENCE FORMAT for Bengali sources:
+   Use this format for Bengali web sources:
+   {{cite web |url=URL |title=শিরোনাম |work=প্রকাশনার নাম |date=তারিখ |language=bn |access-date=সংগ্রহের তারিখ}}
+
+   Use this for Bengali news:
+   {{cite news |url=URL |title=শিরোনাম |newspaper=পত্রিকার নাম |date=তারিখ |language=bn |access-date=সংগ্রহের তারিখ}}
+
+⑤ NEVER delete a reference entirely unless it is:
+   • A dead link with no archived version AND no Bengali equivalent exists
+   • A reference to a clearly unreliable source (tabloid, blog, anonymous forum)
+
+──────────────────────────────────────
+PART B: EXTERNAL LINKS — বাহ্যিক সংযোগ
+──────────────────────────────────────
+
+The == External links == section (translated as == বাহ্যিক সংযোগ ==) should be filtered as follows:
+
+① KEEP these links:
+   • Any link to a Bengali-language official website
+   • Any link to Banglapedia
+   • Any link to Bangladesh or West Bengal government official pages
+   • Any link to Bengali academic or cultural institutions
+   • Official website of the article subject (even if in English) — keep one official link
+
+② REPLACE with Bengali equivalent if possible:
+   • If an English Wikipedia sister project link exists (e.g., Wikiquote, Wikisource), check if a Bengali equivalent exists and link to that instead.
+   • English: {{Wikiquote}} → Bengali: {{উইকিউক্তি}}
+   • English: {{Commons}} → Bengali: {{কমন্স}} (keep as-is, Commons is shared)
+   • English: {{Wikisource}} → Bengali: {{উইকিসংকলন}}
+
+③ REMOVE these links:
+   • Links that lead exclusively to English content with no Bengali version
+   • Redundant links already covered by references
+   • Promotional or commercial links
+
+──────────────────────────────────────
+PART C: IMAGE SOURCING — চিত্র উৎস নির্ণয়
+──────────────────────────────────────
+
+Bengali Wikipedia shares Wikimedia Commons. This means most images from English Wikipedia work automatically in Bengali Wikipedia with the same [[File:filename.jpg]] syntax — no re-uploading needed.
+
+Apply the following logic for every image in the article:
+
+① WIKIMEDIA COMMONS IMAGES (the vast majority — keep exactly as-is):
+   • If the image filename appears on commons.wikimedia.org, it will display perfectly in Bengali Wikipedia without any change.
+   • These are identified by: standard [[File:Name.jpg|...]] or [[Image:Name.jpg|...]] syntax in English Wikipedia articles.
+   • ACTION: Keep the entire image syntax exactly as-is, only translate the caption.
+   • Example: [[File:Albert_Einstein_Head.jpg|thumb|200px|১৯২১ সালে আইনস্টাইন]]
+   • This will render correctly in Bengali Wikipedia automatically.
+
+② LOCALLY UPLOADED / NON-COMMONS IMAGES (rare — flag these):
+   • Some English Wikipedia images are tagged as "fair use" or "non-free" — these are uploaded locally to English Wikipedia only and DO NOT exist on Commons.
+   • These images will NOT display in Bengali Wikipedia.
+   • How to identify them: In the wikitext, they often have tags like {{Non-free...}}, {{Fair use}}, {{Logo}}, {{Book cover}}, {{Film poster}} etc. near them. However, since you are working with raw wikitext only, look for images whose filenames contain words like "logo", "poster", "cover", "screenshot", or brand names.
+   • ACTION for non-Commons images: Keep the [[File:...]] syntax intact in the wikitext (do not delete it), but immediately after that image's closing ]], add this Bengali comment tag:
+     <!-- বাংলা উইকিপিডিয়ায় এই ছবি স্বয়ংক্রিয়ভাবে প্রদর্শিত নাও হতে পারে। কমন্সে আপলোড করা প্রয়োজন হতে পারে। -->
+   • This alerts the editor that manual action may be needed for that specific image.
+
+③ COMMONS IMAGES THAT NEED MANUAL UPLOAD (in very rare cases):
+   • If an image clearly does NOT exist on Commons (identified from context), note this with the comment tag above.
+   • The Bengali Wikipedia editor (the human user) will then need to either upload the image to Commons or find a Commons equivalent.
+   • Never remove the image syntax — always leave it in place with the comment.
+
+④ SUMMARY RULE for images:
+   • 95%+ of English Wikipedia images ARE on Commons → they work automatically → just translate the caption.
+   • For the small remainder → keep syntax + add the Bengali comment flag.
+   • NEVER delete any [[File:...]] tag from the output.
+
+──────────────────────────────────────
+PART D: SISTER PROJECT TEMPLATE CONVERSION
+──────────────────────────────────────
+
+Convert English Wikipedia sister project templates to their Bengali equivalents:
+
+{{Commons}} or {{Commons category}} → keep as {{Commons}} (shared, works in both)
+{{Wikiquote}} → {{উইকিউক্তি}}
+{{Wikisource}} → {{উইকিসংকলন}}
+{{Wikibooks}} → {{উইকিবই}}
+{{Wikinews}} → {{উইকিসংবাদ}}
+{{Wiktionary}} → {{উইকিঅভিধান}}
+{{Wikivoyage}} → {{উইকিভ্রমণ}}
+{{Wikipedia}} (self-ref) → remove
 `;
