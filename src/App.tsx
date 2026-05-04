@@ -74,29 +74,44 @@ export default function App() {
 
     try {
       let title = input.trim();
+      let wikiHost = "en.wikipedia.org";
       
-      // If it's a Wikipedia URL, extract the title
+      // If it's a URL, extract the host and title
       if (title.startsWith("http")) {
         try {
           const urlObj = new URL(title);
-          // Handle both /wiki/Title and ?title=Title
-          const pathParts = urlObj.pathname.split('/');
-          title = pathParts[pathParts.length - 1] || title;
+          wikiHost = urlObj.hostname;
           
-          if (urlObj.searchParams.has('title')) {
-            title = urlObj.searchParams.get('title') || title;
+          // Extract title from search or title parameter (common in searches)
+          const searchParam = urlObj.searchParams.get("search");
+          const titleParam = urlObj.searchParams.get("title");
+          
+          if (searchParam) {
+            title = searchParam;
+          } else if (titleParam) {
+            title = titleParam;
+          } else if (urlObj.pathname.includes("/wiki/")) {
+            // Pattern: /wiki/Article_Title/Sub_Page correctly captures full hierarchies
+            title = urlObj.pathname.split("/wiki/")[1];
+            if (title) {
+              title = decodeURIComponent(title).replace(/_/g, ' ');
+            }
+          } else {
+            // Fallback: take last non-empty segment
+            const pathParts = urlObj.pathname.split('/').filter(p => !!p);
+            const lastPart = pathParts[pathParts.length - 1];
+            if (lastPart) {
+              title = decodeURIComponent(lastPart).replace(/_/g, ' ');
+            }
           }
-          
-          // Decode URL component (e.g. %20 -> space)
-          title = decodeURIComponent(title);
         } catch (e) {
-          // Fallback to original if URL parsing fails
+          // Fallback to original input if URL parsing fails
         }
       }
 
-      // Wikipedia API for wikitext with CORS support (origin=*)
+      // Wikipedia API (and other Wikimedia projects) for wikitext with CORS support (origin=*)
       // Added redirects=1 to handle title changes automatically
-      const wikiApiUrl = `https://en.wikipedia.org/w/api.php?action=query&prop=revisions&titles=${encodeURIComponent(title)}&rvprop=content&format=json&origin=*&redirects=1`;
+      const wikiApiUrl = `https://${wikiHost}/w/api.php?action=query&prop=revisions&titles=${encodeURIComponent(title)}&rvprop=content&format=json&origin=*&redirects=1`;
       
       const response = await fetch(wikiApiUrl, {
         method: 'GET',
@@ -286,7 +301,7 @@ ${chunk.source}`,
             </div>
             <div>
               <h1 className="text-xl font-bold tracking-tight text-neutral-800 font-display">Bengali Wiki Writer</h1>
-              <p className="text-[10px] text-neutral-500 font-bold uppercase tracking-[0.2em]">Wikipedia Editor Pro</p>
+              <p className="text-[10px] text-neutral-500 font-bold uppercase tracking-[0.2em]">Multi-Wiki Editor Pro</p>
             </div>
           </div>
           
@@ -314,7 +329,7 @@ ${chunk.source}`,
               type="text" 
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Enter English Wikipedia URL or article name..."
+              placeholder="Enter Wikipedia, Wikibooks, or other Wiki URL/title..."
               className="flex-1 bg-transparent border-none outline-none py-3 text-lg placeholder:text-neutral-300"
               onKeyDown={(e) => e.key === "Enter" && handleFetch()}
             />
@@ -327,7 +342,7 @@ ${chunk.source}`,
             </button>
           </div>
           <p className="text-center text-sm text-neutral-400 mt-4">
-            Example: <span className="italic">"Black hole"</span> or <span className="italic">"Albert Einstein"</span>
+            Example: <span className="italic">"Black hole"</span> or <span className="italic">"https://en.wikibooks.org/wiki/Cookbook:Table_of_Contents"</span>
           </p>
         </div>
 
@@ -355,7 +370,7 @@ ${chunk.source}`,
               <ul className="text-sm space-y-3 text-neutral-600">
                 <li className="flex gap-2">
                   <span className="w-5 h-5 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0">1</span>
-                  Fetch any English Wikipedia article.
+                  Fetch any English Wikipedia, Wikibooks, or other Wiki article.
                 </li>
                 <li className="flex gap-2">
                   <span className="w-5 h-5 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0">2</span>
@@ -447,7 +462,7 @@ ${chunk.source}`,
                   </div>
                   <h2 className="text-xl font-bold text-neutral-800 mb-2">Ready to start?</h2>
                   <p className="text-neutral-500 max-w-sm mb-8">
-                    Enter an English Wikipedia title or URL above. We will split the article into sections for easier translation.
+                    Enter a Wikipedia, Wikibooks, or other Wiki title or URL above. We will split the article into sections for easier translation.
                   </p>
                   <div className="grid grid-cols-2 gap-4 w-full max-w-lg">
                      <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-100 text-left">
