@@ -37,6 +37,7 @@ export default function App() {
   const editorRefs = useRef<{[key: string]: HTMLDivElement | null}>({});
 
   const createChunks = (text: string) => {
+    if (!text) return [];
     // Target uniform size around 2500 characters
     const targetSize = 2500;
     const paragraphs = text.split(/\n\n+/);
@@ -72,18 +73,87 @@ export default function App() {
     setChunks([]);
 
     try {
-      const response = await fetch("/api/fetch-wiki", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ input: input.trim() }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Failed to fetch");
+      let title = input.trim();
       
-      const newChunks = createChunks(data.wikitext);
+      // If it's a Wikipedia URL, extract the title
+      if (title.startsWith("http")) {
+        try {
+          const urlObj = new URL(title);
+          // Handle both /wiki/Title and ?title=Title
+          const pathParts = urlObj.pathname.split('/');
+          title = pathParts[pathParts.length - 1] || title;
+          
+          if (urlObj.searchParams.has('title')) {
+            title = urlObj.searchParams.get('title') || title;
+          }
+          
+          // Decode URL component (e.g. %20 -> space)
+          title = decodeURIComponent(title);
+        } catch (e) {
+          // Fallback to original if URL parsing fails
+        }
+      }
+
+      // Wikipedia API for wikitext with CORS support (origin=*)
+      // Added redirects=1 to handle title changes automatically
+      const wikiApiUrl = `https://en.wikipedia.org/w/api.php?action=query&prop=revisions&titles=${encodeURIComponent(title)}&rvprop=content&format=json&origin=*&redirects=1`;
+      
+      const response = await fetch(wikiApiUrl, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Api-User-Agent': 'WikiTranslatorApp/1.0 (https://ais-dev.cloudrun.app)'
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`Wikipedia API returned status ${response.status}`);
+      }
+
+      const text = await response.text();
+      if (!text || !text.trim()) {
+        throw new Error("Wikipedia returned an empty response. Please try again.");
+      }
+
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        console.error("JSON Parse Error. Raw response:", text.substring(0, 500));
+        throw new Error("Wikipedia returned invalid data. Please try again with a different article.");
+      }
+      
+      if (!data.query || !data.query.pages) {
+        throw new Error("Could not find article. Please check the name or URL.");
+      }
+
+      const pages = data.query.pages;
+      const pageId = Object.keys(pages)[0];
+      
+      if (pageId === "-1") {
+        throw new Error("Article not found. Please ensure the Wikipedia article exists.");
+      }
+
+      const revisions = pages[pageId].revisions;
+      if (!revisions || revisions.length === 0) {
+        throw new Error("Could not retrieve article content. The page might be empty or protected.");
+      }
+
+      // Wikipedia content can be in 'content' or '*' depending on API version/params
+      const wikitext = revisions[0].content || revisions[0]['*'];
+      
+      if (wikitext === undefined) {
+        throw new Error("Article content structure not recognized. Please try again.");
+      }
+
+      const newChunks = createChunks(wikitext);
+      if (newChunks.length === 0) {
+        throw new Error("The article has no content to translate.");
+      }
       setChunks(newChunks);
     } catch (err: any) {
-      setError(err.message);
+      console.error("Fetch error:", err);
+      setError(err.message || "Failed to fetch. This may be a network error or the article doesn't exist.");
     } finally {
       setIsFetching(false);
     }
@@ -96,11 +166,13 @@ export default function App() {
     setChunks(prev => prev.map((c, i) => i === index ? { ...c, isTranslating: true, error: null } : c));
 
     try {
+      // Use process.env.GEMINI_API_KEY which is defined in vite.config.ts
       const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) throw new Error("GEMINI_API_KEY mission");
-
-      const ai = new GoogleGenAI({ apiKey });
       
+      if (!apiKey || apiKey === "undefined" || apiKey.length < 10) {
+        throw new Error("API Key missing. Please set VITE_GEMINI_API_KEY in your hosting provider's (e.g. Netlify/Cloudflare) settings.");
+      }
+
       const countImages = (str: string) => {
         const matches = str.match(/(?:\[\[(?:File|Image):|\|\s*(?:image|logo|map|skyline|signature|image_name)\s*=)/gi) || [];
         return matches.length;
@@ -123,26 +195,31 @@ STRICT CRITICAL RULES:
 
 ${INSTRUCTIONS}`;
 
+      const ai = new GoogleGenAI({ apiKey });
+
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
-        contents: [{ role: "user", parts: [{ text: `TRANSLATE THIS WIKITEXT SECTION. 
+        contents: `TRANSLATE THIS WIKITEXT SECTION. 
 - PRESERVE ALL ${sourceImagesCount} IMAGES.
 - DO NOT SKIP ANY CONTENT.
 - EXPAND NATURALLY IN BENGALI.
 
 SOURCE:
-${chunk.source}` }] }],
+${chunk.source}`,
         config: {
           systemInstruction,
-          temperature: 0,
-          maxOutputTokens: 16384,
+          temperature: 0.1,
         }
       });
 
       let text = response.text || "";
+      
       text = text.replace(/^```wikitext\n/, "").replace(/^```\n?/, "").replace(/\n?```$/, "");
 
-      const countWords = (str: string) => str.trim().split(/\s+/).length;
+      const countWords = (str: any) => {
+        if (typeof str !== 'string') return 0;
+        return str.trim().split(/\s+/).filter(Boolean).length;
+      };
       
       // Highlight heuristic
       const sourceLines = chunk.source.split('\n');
@@ -171,7 +248,15 @@ ${chunk.source}` }] }],
       } : c));
 
     } catch (err: any) {
-      setChunks(prev => prev.map((c, i) => i === index ? { ...c, isTranslating: false, error: err.message } : c));
+      console.error("Translation error details:", err);
+      // Fallback for common error types
+      let errorMsg = err.message || "Unknown translation error";
+      if (errorMsg.includes("API key not valid")) {
+        errorMsg = "Invalid API Key. Please check your settings.";
+      } else if (errorMsg.includes("User location is not supported")) {
+        errorMsg = "Gemini is not available in your region.";
+      }
+      setChunks(prev => prev.map((c, i) => i === index ? { ...c, isTranslating: false, error: errorMsg } : c));
     }
   };
 
@@ -399,9 +484,14 @@ ${chunk.source}` }] }],
 
                       <div className="flex items-center gap-2">
                         {chunk.error && (
-                          <div className="flex items-center gap-1 text-red-600 text-[10px] font-bold mr-2">
-                            <AlertCircle size={12} />
-                            Retry Required
+                          <div className="flex flex-col items-end mr-3">
+                            <div className="flex items-center gap-1 text-red-600 text-[10px] font-bold">
+                              <AlertCircle size={12} />
+                              Error
+                            </div>
+                            <span className="text-[9px] text-red-500 font-medium max-w-[200px] overflow-hidden text-ellipsis whitespace-nowrap" title={chunk.error}>
+                              {chunk.error}
+                            </span>
                           </div>
                         )}
                         <button 
